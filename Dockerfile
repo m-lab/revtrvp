@@ -8,7 +8,6 @@ RUN apt-get update && \
       build-essential \
       ca-certificates \
       coreutils \
-      gcc \
       git \
       inetutils-traceroute \
       init-system-helpers \

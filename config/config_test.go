@@ -131,6 +131,70 @@ func TestFile(t *testing.T) {
 	}
 }
 
+// PtrConfig mirrors the pointer-field style plvp.Conf actually uses (see
+// plvp/types.go), rather than TestEnv/TestFile's plain-value Config. With
+// pointer fields, buildMap can tell "this key was absent from this
+// particular YAML file" (nil, skipped) apart from "present with a zero
+// value", which plain fields cannot. It also uses flag names distinct
+// from Config/SubConfig's so it isn't affected by config paths other
+// tests register in the package-level (never reset) configFiles.
+//
+// Note YAML keys match the (lowercased) field name, not the flag tag —
+// same as production's plvp.Conf, which has no yaml tags either.
+type PtrConfig struct {
+	Name *string `flag:"env-file-name"`
+	Num  *int    `flag:"env-file-num"`
+}
+
+// TestEnvOverridesFile verifies the precedence documented in doc.go:
+// "Command line flags take precedent over environment variables which
+// take precedent over config files." A config file value must not
+// clobber a value already supplied via an environment variable, and a
+// config file value must still apply for keys nothing else set.
+func TestEnvOverridesFile(t *testing.T) {
+	args := []string{"dummy", "dummy"}
+	os.Args = args
+
+	if err := os.Setenv("ENV_FILE_NAME", "FromEnv"); err != nil {
+		t.Fatal("TestEnvOverridesFile: ", err)
+	}
+	defer func() {
+		if err := os.Unsetenv("ENV_FILE_NAME"); err != nil {
+			t.Fatal("TestEnvOverridesFile: ", err)
+		}
+	}()
+
+	fileName := "revtr.Config"
+	tmpfile, err := ioutil.TempFile("", fileName)
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+	if _, err = tmpfile.Write([]byte("name: FromFile\nnum: 65\n")); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+	config.AddConfigPath(tmpfile.Name())
+	tmpfile.Close()
+
+	// Fields must be pre-allocated before binding, matching how the real
+	// plvp.Conf is constructed (see plvp/types.go's Default()).
+	conf := PtrConfig{Name: new(string), Num: new(int)}
+	flags := flag.NewFlagSet("Test", flag.ContinueOnError)
+	flags.StringVar(conf.Name, "env-file-name", "", "")
+	flags.IntVar(conf.Num, "env-file-num", 0, "")
+	err = config.Parse(flags, &conf)
+	if err != nil && !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatal("Error Parsing flags: ", err)
+	}
+	if conf.Name == nil || *conf.Name != "FromEnv" {
+		t.Fatalf("Expected env var to take precedence over config file. Expected[FromEnv] got[%v]", conf.Name)
+	}
+	// The file-only key should still apply, since nothing else set it.
+	if conf.Num == nil || *conf.Num != 65 {
+		t.Fatalf("Expected file value to apply for keys not set elsewhere. Expected[65] got[%v]", conf.Num)
+	}
+}
+
 func TestParse(t *testing.T) {
 	var conf Config
 	flags := flag.NewFlagSet("Test", flag.ContinueOnError)

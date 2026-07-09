@@ -106,11 +106,18 @@ func mergeFiles(f *flag.FlagSet, opts interface{}) error {
 	}
 	sort.Sort(configPathOrder(paths))
 	for _, path := range paths {
-		err := parseYamlConfig(path.Path, opts)
+		// Unmarshal into a scratch copy of opts, rather than opts itself,
+		// so that a value already set by a higher-precedence source (a
+		// command line flag or environment variable) isn't blown away by
+		// this file just because the file also defines that key. Only
+		// keys actually present in the file end up non-nil in scratch;
+		// handleFile/merge then only apply those to flags not already set.
+		scratch := reflect.New(ov.Elem().Type()).Interface()
+		err := parseYamlConfig(path.Path, scratch)
 		if err != nil {
 			return err
 		}
-		ops, err := buildMap(ov)
+		ops, err := buildMap(reflect.ValueOf(scratch))
 		if err != nil {
 			return nil
 		}

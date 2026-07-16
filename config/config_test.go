@@ -195,6 +195,55 @@ func TestEnvOverridesFile(t *testing.T) {
 	}
 }
 
+// UnregisteredFlagConfig has a "flag" tag (Unbound) with no corresponding
+// flag.XxxVar registration anywhere - mirroring plvp.Conf.Scamper.CAFile
+// in production, which has a flag tag but is never bound via flag.XxxVar
+// in main.go. Such a field can only ever be set by a config file; there
+// is no flag or env var path for it. mergeFiles must still set it
+// directly from the file, matching the original (pre-precedence-fix)
+// behavior for these fields.
+type UnregisteredFlagConfig struct {
+	Unbound *string `flag:"unbound-name"`
+}
+
+// TestFileSetsUnregisteredFlag is a regression test for a real bug
+// found in revtrvp's plvp.Conf.Scamper.CAFile: switching mergeFiles to
+// unmarshal into a scratch copy (to fix precedence) broke every field
+// that has a "flag" tag but no actual flag.XxxVar registration, because
+// such a field is invisible to the flag-based merge/handleFile
+// mechanism - it can only be set by unmarshaling directly onto the live
+// struct. CAFile going permanently nil caused a nil pointer dereference
+// panic (plvantagepoint.go:240) in every revtrvp instance, since v0.4.0
+// never registers "ca-file" as a flag, and NewConfig() never
+// pre-allocates it either.
+func TestFileSetsUnregisteredFlag(t *testing.T) {
+	args := []string{"dummy", "dummy"}
+	os.Args = args
+
+	tmpfile, err := ioutil.TempFile("", "revtr.Config")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+	if _, err = tmpfile.Write([]byte("unbound: FromFile\n")); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+	config.AddConfigPath(tmpfile.Name())
+	tmpfile.Close()
+
+	// No flags.StringVar call at all for "unbound-name" - deliberately,
+	// matching CAFile/"ca-file" never being registered in main.go.
+	conf := UnregisteredFlagConfig{}
+	flags := flag.NewFlagSet("Test", flag.ContinueOnError)
+	err = config.Parse(flags, &conf)
+	if err != nil && !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatal("Error Parsing flags: ", err)
+	}
+	if conf.Unbound == nil || *conf.Unbound != "FromFile" {
+		t.Fatalf("Expected file to set a field with no registered flag. Expected[FromFile] got[%v]", conf.Unbound)
+	}
+}
+
 func TestParse(t *testing.T) {
 	var conf Config
 	flags := flag.NewFlagSet("Test", flag.ContinueOnError)
